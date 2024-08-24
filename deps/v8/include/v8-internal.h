@@ -295,7 +295,8 @@ constexpr size_t kExternalPointerTableReservationSize = 256 * MB;
 
 // The external pointer table indices stored in HeapObjects as external
 // pointers are shifted to the left by this amount to guarantee that they are
-// smaller than the maximum table size.
+// smaller than the maximum table size even after the C++ compiler multiplies
+// them by 8 to be used as indexes into a table of 64 bit pointers.
 constexpr uint32_t kExternalPointerIndexShift = 7;
 #else
 constexpr size_t kExternalPointerTableReservationSize = 512 * MB;
@@ -946,12 +947,8 @@ class Internals {
       kIsolateCppHeapPointerTableOffset + kExternalPointerTableSize;
   static const int kIsolateTrustedPointerTableOffset =
       kIsolateTrustedCageBaseOffset + kApiSystemPointerSize;
-  static const int kIsolateExternalBufferTableOffset =
-      kIsolateTrustedPointerTableOffset + kTrustedPointerTableSize;
-  static const int kIsolateSharedExternalBufferTableAddressOffset =
-      kIsolateExternalBufferTableOffset + kExternalBufferTableSize;
   static const int kIsolateApiCallbackThunkArgumentOffset =
-      kIsolateSharedExternalBufferTableAddressOffset + kApiSystemPointerSize;
+      kIsolateTrustedPointerTableOffset + kTrustedPointerTableSize;
 #else
   static const int kIsolateApiCallbackThunkArgumentOffset =
       kIsolateCppHeapPointerTableOffset + kExternalPointerTableSize;
@@ -978,7 +975,7 @@ class Internals {
   V(TrueValue, 0xc9)                      \
   V(FalseValue, 0xad)                     \
   V(EmptyString, 0xa1)                    \
-  V(TheHoleValue, 0x741)
+  V(TheHoleValue, 0x791)
 
   using Tagged_t = uint32_t;
   struct StaticReadOnlyRoot {
@@ -986,8 +983,9 @@ class Internals {
     EXPORTED_STATIC_ROOTS_PTR_LIST(DEF_ROOT)
 #undef DEF_ROOT
 
-    static constexpr Tagged_t kFirstStringMap = 0xe5;
-    static constexpr Tagged_t kLastStringMap = 0x47d;
+    // Use 0 for kStringMapLowerBound since string maps are the first maps.
+    static constexpr Tagged_t kStringMapLowerBound = 0;
+    static constexpr Tagged_t kStringMapUpperBound = 0x47d;
 
 #define PLUSONE(...) +1
     static constexpr size_t kNumberOfExportedStaticRoots =
@@ -1556,12 +1554,12 @@ constexpr WrappedIterator<Iterator> operator+(
 // whether direct local support is enabled.
 class ValueHelper final {
  public:
-#ifdef V8_ENABLE_DIRECT_LOCAL
+#ifdef V8_ENABLE_DIRECT_HANDLE
   static constexpr Address kTaggedNullAddress = 1;
   static constexpr Address kEmpty = kTaggedNullAddress;
 #else
   static constexpr Address kEmpty = kNullAddress;
-#endif  // V8_ENABLE_DIRECT_LOCAL
+#endif  // V8_ENABLE_DIRECT_HANDLE
 
   template <typename T>
   V8_INLINE static bool IsEmpty(T* value) {
@@ -1577,7 +1575,7 @@ class ValueHelper final {
     return handle.template value<T>();
   }
 
-#ifdef V8_ENABLE_DIRECT_LOCAL
+#ifdef V8_ENABLE_DIRECT_HANDLE
 
   template <typename T>
   V8_INLINE static Address ValueAsAddress(const T* value) {
@@ -1592,7 +1590,7 @@ class ValueHelper final {
     return *reinterpret_cast<T**>(slot);
   }
 
-#else  // !V8_ENABLE_DIRECT_LOCAL
+#else  // !V8_ENABLE_DIRECT_HANDLE
 
   template <typename T>
   V8_INLINE static Address ValueAsAddress(const T* value) {
@@ -1604,7 +1602,7 @@ class ValueHelper final {
     return reinterpret_cast<T*>(slot);
   }
 
-#endif  // V8_ENABLE_DIRECT_LOCAL
+#endif  // V8_ENABLE_DIRECT_HANDLE
 };
 
 /**

@@ -6,6 +6,7 @@
 
 #include "include/v8-maybe.h"
 #include "src/base/logging.h"
+#include "src/base/macros.h"
 #include "src/execution/isolate.h"
 #include "src/handles/handles.h"
 #include "src/handles/maybe-handles.h"
@@ -15,84 +16,23 @@
 #include "src/objects/js-disposable-stack-inl.h"
 #include "src/objects/js-function.h"
 #include "src/objects/js-objects.h"
+#include "src/objects/js-promise-inl.h"
 #include "src/objects/js-promise.h"
 #include "src/objects/objects-inl.h"
 #include "src/objects/objects.h"
 #include "src/objects/oddball.h"
+#include "src/objects/tagged.h"
+#include "v8-promise.h"
 
 namespace v8 {
 namespace internal {
-
-// We implement async resources disposal by promise chaining in
-// `DisposeResourcesAwaitPoint`.
-Handle<JSReceiver> JSDisposableStackBase::DisposeResourcesAwaitPoint(
-    Isolate* isolate, DirectHandle<JSDisposableStackBase> disposable_stack,
-    int length, MaybeHandle<Object> result, MaybeHandle<Object> maybe_error) {
-  disposable_stack->set_length(length);
-  Handle<JSReceiver> promise = isolate->factory()->NewJSPromise();
-
-  Handle<Object> result_handle;
-  Handle<Object> existing_error;
-
-  if (result.ToHandle(&result_handle)) {
-    Handle<JSFunction> promise_function = isolate->promise_function();
-    Handle<Object> argv[] = {result_handle};
-    Handle<Object> resolve_result =
-        Execution::CallBuiltin(isolate, isolate->promise_resolve(),
-                               promise_function, arraysize(argv), argv)
-            .ToHandleChecked();
-    promise = Cast<JSReceiver>(resolve_result);
-  } else {
-    UNIMPLEMENTED();
-  }
-
-  Handle<Context> async_disposable_stack_context =
-      isolate->factory()->NewBuiltinContext(
-          isolate->native_context(),
-          static_cast<int>(AsyncDisposableStackContextSlots::kLength));
-  async_disposable_stack_context->set(
-      static_cast<int>(AsyncDisposableStackContextSlots::kStack),
-      *disposable_stack);
-
-  if (maybe_error.ToHandle(&existing_error)) {
-    async_disposable_stack_context->set(
-        static_cast<int>(AsyncDisposableStackContextSlots::kError),
-        *existing_error);
-  } else {
-    async_disposable_stack_context->set(
-        static_cast<int>(AsyncDisposableStackContextSlots::kError),
-        ReadOnlyRoots(isolate).the_hole_value());
-  }
-
-  Handle<JSFunction> on_fulfilled =
-      Factory::JSFunctionBuilder{
-          isolate,
-          isolate->factory()->async_disposable_stack_on_fulfilled_shared_fun(),
-          async_disposable_stack_context}
-          .Build();
-
-  Handle<JSFunction> on_rejected =
-      Factory::JSFunctionBuilder{
-          isolate,
-          isolate->factory()->async_disposable_stack_on_rejected_shared_fun(),
-          async_disposable_stack_context}
-          .Build();
-
-  Handle<Object> argv[] = {on_fulfilled, on_rejected};
-
-  Handle<Object> then_result =
-      Execution::CallBuiltin(isolate, isolate->promise_then(), promise,
-                             arraysize(argv), argv)
-          .ToHandleChecked();
-  return Cast<JSReceiver>(then_result);
-}
 
 // https://arai-a.github.io/ecma262-compare/?pr=3000&id=sec-disposeresources
 // (TODO:rezvan):
 // https://github.com/tc39/proposal-explicit-resource-management/pull/219
 MaybeHandle<Object> JSDisposableStackBase::DisposeResources(
     Isolate* isolate, DirectHandle<JSDisposableStackBase> disposable_stack,
-    MaybeHandle<Object> maybe_original_error,
+    MaybeHandle<Object> maybe_continuation_error,
     DisposableStackResourcesType resources_type) {
   DCHECK(!IsUndefined(disposable_stack->stack()));
 
@@ -101,8 +41,11 @@ MaybeHandle<Object> JSDisposableStackBase::DisposeResources(
   int length = disposable_stack->length();
 
   MaybeHandle<Object> result;
-  MaybeHandle<Object> maybe_error = maybe_original_error;
-  Handle<Object> existing_error;
+  Handle<Object> continuation_error;
+
+  if (maybe_continuation_error.ToHandle(&continuation_error)) {
+    disposable_stack->set_error(*continuation_error);
+  }
 
   // 1. For each element resource of
   // disposeCapability.[[DisposableResourceStack]], in reverse list order, do
@@ -124,6 +67,10 @@ MaybeHandle<Object> JSDisposableStackBase::DisposeResources(
         DisposeCallTypeBit::decode(stack_type_case);
     DisposeMethodHint hint = DisposeHintBit::decode(stack_type_case);
 
+    v8::TryCatch try_catch(reinterpret_cast<v8::Isolate*>(isolate));
+    try_catch.SetVerbose(false);
+    try_catch.SetCaptureMessage(false);
+
     if (call_type == DisposeMethodCallType::kValueIsReceiver) {
       result = Execution::Call(isolate, method, value, 0, nullptr);
     } else if (call_type == DisposeMethodCallType::kValueIsArgument) {
@@ -131,15 +78,33 @@ MaybeHandle<Object> JSDisposableStackBase::DisposeResources(
                                ReadOnlyRoots(isolate).undefined_value_handle(),
                                1, argv);
     }
-    if (hint == DisposeMethodHint::kAsyncDispose) {
-      DCHECK_NE(resources_type, DisposableStackResourcesType::kAllSync);
-      return DisposeResourcesAwaitPoint(isolate, disposable_stack, length,
-                                        result, maybe_error);
-    }
 
-    //  b. If result is a throw completion, then
-    if (result.is_null() && hint == DisposeMethodHint::kSyncDispose) {
-      maybe_error = HandleErrorInDisposal(isolate, maybe_error);
+    Handle<Object> result_handle;
+
+    if (result.ToHandle(&result_handle)) {
+      if (hint == DisposeMethodHint::kAsyncDispose) {
+        DCHECK_NE(resources_type, DisposableStackResourcesType::kAllSync);
+        disposable_stack->set_length(length);
+
+        if (result.ToHandle(&result_handle)) {
+          Handle<JSFunction> promise_function = isolate->promise_function();
+          Handle<Object> argv[] = {result_handle};
+          Handle<Object> resolve_result =
+              Execution::CallBuiltin(isolate, isolate->promise_resolve(),
+                                     promise_function, arraysize(argv), argv)
+                  .ToHandleChecked();
+          return Cast<JSReceiver>(resolve_result);
+        }
+      }
+    } else {
+      // b. If result is a throw completion, then
+      DCHECK(isolate->has_exception());
+      DCHECK(try_catch.HasCaught());
+      Handle<Object> current_error(isolate->exception(), isolate);
+      if (!isolate->is_catchable_by_javascript(*current_error)) {
+        return {};
+      }
+      HandleErrorInDisposal(isolate, disposable_stack, current_error);
     }
   }
 
@@ -151,10 +116,13 @@ MaybeHandle<Object> JSDisposableStackBase::DisposeResources(
   disposable_stack->set_length(0);
   disposable_stack->set_state(DisposableStackState::kDisposed);
 
+  Handle<Object> existing_error_handle(disposable_stack->error(), isolate);
+  disposable_stack->set_error(*(isolate->factory()->uninitialized_value()));
+
   // 4. Return ? completion.
-  if (maybe_error.ToHandle(&existing_error) &&
-      !(maybe_error.equals(maybe_original_error))) {
-    isolate->Throw(*existing_error);
+  if (!IsUninitialized(*existing_error_handle) &&
+      !(existing_error_handle.equals(continuation_error))) {
+    isolate->Throw(*existing_error_handle);
     return MaybeHandle<Object>();
   }
   return isolate->factory()->undefined_value();

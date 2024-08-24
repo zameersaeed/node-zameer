@@ -2,36 +2,21 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "src/api/api.h"
 #include "src/base/logging.h"
+#include "src/base/macros.h"
 #include "src/builtins/builtins-utils-inl.h"
 #include "src/handles/maybe-handles.h"
 #include "src/objects/js-disposable-stack-inl.h"
 #include "src/objects/js-disposable-stack.h"
+#include "src/objects/js-objects.h"
+#include "src/objects/js-promise-inl.h"
 #include "src/objects/js-promise.h"
+#include "src/objects/objects.h"
 #include "src/roots/roots.h"
 
 namespace v8 {
 namespace internal {
-
-BUILTIN(AsyncDisposableStackOnFulfilled) {
-  HandleScope scope(isolate);
-
-  Handle<JSDisposableStackBase> stack = Handle<JSDisposableStackBase>(
-      Cast<JSDisposableStackBase>(isolate->context()->get(static_cast<int>(
-          JSDisposableStackBase::AsyncDisposableStackContextSlots::kStack))),
-      isolate);
-  MaybeHandle<Object> maybe_error = MaybeHandle<Object>(
-      Cast<Object>(isolate->context()->get(static_cast<int>(
-          JSDisposableStackBase::AsyncDisposableStackContextSlots::kError))),
-      isolate);
-
-  JSDisposableStackBase::DisposeResources(
-      isolate, stack, maybe_error,
-      DisposableStackResourcesType::kAtLeastOneAsync);
-  return ReadOnlyRoots(isolate).undefined_value();
-}
-
-BUILTIN(AsyncDisposableStackOnRejected) { UNIMPLEMENTED(); }
 
 // Part of
 // https://tc39.es/proposal-explicit-resource-management/#sec-getdisposemethod
@@ -52,6 +37,11 @@ BUILTIN(AsyncDisposeFromSyncDispose) {
           JSDisposableStackBase::AsyncDisposeFromSyncDisposeContextSlots::
               kMethod))),
       isolate);
+
+  v8::TryCatch try_catch(reinterpret_cast<v8::Isolate*>(isolate));
+  try_catch.SetVerbose(false);
+  try_catch.SetCaptureMessage(false);
+
   MaybeHandle<Object> result = Execution::Call(
       isolate, sync_method, ReadOnlyRoots(isolate).undefined_value_handle(), 0,
       nullptr);
@@ -63,8 +53,13 @@ BUILTIN(AsyncDisposeFromSyncDispose) {
     //        undefined »).
     JSPromise::Resolve(promise, result_handle).ToHandleChecked();
   } else {
+    Tagged<Object> exception = isolate->exception();
+    if (!isolate->is_catchable_by_javascript(exception)) {
+      return {};
+    }
     //        d. IfAbruptRejectPromise(result, promiseCapability).
-    UNIMPLEMENTED();
+    DCHECK(try_catch.HasCaught());
+    JSPromise::Reject(promise, handle(exception, isolate));
   }
 
   //        f. Return promiseCapability.[[Promise]].

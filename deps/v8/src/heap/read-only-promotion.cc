@@ -337,7 +337,8 @@ class ReadOnlyPromotionImpl final : public AllStatic {
     //
     // Known objects.
     Heap* heap = isolate->heap();
-    CHECK(InReadOnlySpace(heap->promise_all_resolve_element_shared_fun()));
+    CHECK(InReadOnlySpace(
+        heap->promise_all_resolve_element_closure_shared_fun()));
     // TODO(jgruber): Extend here with more objects as they are added to
     // the promotion algorithm.
 
@@ -426,6 +427,22 @@ class ReadOnlyPromotionImpl final : public AllStatic {
       }
 #endif  // V8_ENABLE_SANDBOX
     }
+    void VisitJSDispatchTableEntry(Tagged<HeapObject> host,
+                                   JSDispatchHandle handle) final {
+      // Here we need to update entries in the JSDispatchTable if the Code
+      // object they point to was promoted into read-only space.
+#ifdef V8_ENABLE_LEAPTIERING
+      JSDispatchTable* jdt = GetProcessWideJSDispatchTable();
+      if (!jdt->HasCode(handle)) return;
+      Tagged<HeapObject> old_code = jdt->GetCode(handle);
+      auto it = moves_->find(old_code);
+      if (it == moves_->end()) return;
+      Tagged<HeapObject> new_code = it->second;
+      CHECK(IsCode(new_code));
+      // TODO(saelo): is it worth logging something in this case?
+      jdt->SetCode(handle, Cast<Code>(new_code));
+#endif
+    }
     void VisitRootPointers(Root root, const char* description,
                            OffHeapObjectSlot start,
                            OffHeapObjectSlot end) override {
@@ -442,7 +459,7 @@ class ReadOnlyPromotionImpl final : public AllStatic {
    private:
     void ProcessSlot(Root root, FullObjectSlot slot) {
       Tagged<Object> old_slot_value_obj = slot.load(isolate_);
-#ifdef V8_ENABLE_DIRECT_LOCAL
+#ifdef V8_ENABLE_DIRECT_HANDLE
       if (old_slot_value_obj.ptr() == kTaggedNullAddress) return;
 #endif
       if (!IsHeapObject(old_slot_value_obj)) return;

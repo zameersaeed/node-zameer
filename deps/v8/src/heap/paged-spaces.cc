@@ -431,7 +431,7 @@ void PagedSpaceBase::Verify(Isolate* isolate,
       CHECK_EQ(bytes, ExternalBackingStoreBytes(
                           ExternalBackingStoreType::kArrayBuffer));
     } else if (identity() == NEW_SPACE) {
-      DCHECK(v8_flags.minor_ms);
+      CHECK(v8_flags.minor_ms);
       size_t bytes = heap()->array_buffer_sweeper()->young().BytesSlow();
       CHECK_EQ(bytes, ExternalBackingStoreBytes(
                           ExternalBackingStoreType::kArrayBuffer));
@@ -625,10 +625,14 @@ CompactionSpaceCollection::CompactionSpaceCollection(
                  compaction_space_kind),
       code_space_(heap, CODE_SPACE, Executability::EXECUTABLE,
                   compaction_space_kind),
-      shared_space_(heap, SHARED_SPACE, Executability::NOT_EXECUTABLE,
-                    compaction_space_kind),
       trusted_space_(heap, TRUSTED_SPACE, Executability::NOT_EXECUTABLE,
-                     compaction_space_kind) {}
+                     compaction_space_kind) {
+  if (heap->isolate()->has_shared_space()) {
+    shared_space_.emplace(heap->isolate()->shared_space_isolate()->heap(),
+                          SHARED_SPACE, Executability::NOT_EXECUTABLE,
+                          compaction_space_kind);
+  }
+}
 
 // -----------------------------------------------------------------------------
 // OldSpace implementation

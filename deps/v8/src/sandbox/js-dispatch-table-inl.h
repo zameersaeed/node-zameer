@@ -106,22 +106,44 @@ Address JSDispatchTable::GetEntrypoint(JSDispatchHandle handle) {
   return at(index).GetEntrypoint();
 }
 
+Address JSDispatchTable::GetCodeAddress(JSDispatchHandle handle) {
+  uint32_t index = HandleToIndex(handle);
+  Address ptr = at(index).GetCodePointer();
+  DCHECK(Internals::HasHeapObjectTag(ptr));
+  return ptr;
+}
+
 uint16_t JSDispatchTable::GetParameterCount(JSDispatchHandle handle) {
   uint32_t index = HandleToIndex(handle);
   return at(index).GetParameterCount();
 }
 
-void JSDispatchTable::Mark(Space* space, JSDispatchHandle handle) {
-  DCHECK(space->BelongsTo(this));
-  // The null entry is immortal and immutable, so no need to mark it as alive.
-  if (handle == kNullJSDispatchHandle) return;
-
+void JSDispatchTable::Mark(JSDispatchHandle handle) {
   uint32_t index = HandleToIndex(handle);
-  DCHECK(space->Contains(index));
+
+  // The read-only space is immortal and cannot be written to.
+  if (index < kEndOfInternalReadOnlySegment) return;
 
   CFIMetadataWriteScope write_scope("JSDispatchTable write");
   at(index).Mark();
 }
+
+#ifdef DEBUG
+void JSDispatchTable::VerifyEntry(JSDispatchHandle handle, Space* space,
+                                  Space* ro_space) {
+  DCHECK(space->BelongsTo(this));
+  DCHECK(ro_space->BelongsTo(this));
+  if (handle == kNullJSDispatchHandle) {
+    return;
+  }
+  uint32_t index = HandleToIndex(handle);
+  if (ro_space->Contains(index)) {
+    DCHECK(at(index).IsMarked());
+  } else {
+    DCHECK(space->Contains(index));
+  }
+}
+#endif  // DEBUG
 
 template <typename Callback>
 void JSDispatchTable::IterateActiveEntriesIn(Space* space, Callback callback) {

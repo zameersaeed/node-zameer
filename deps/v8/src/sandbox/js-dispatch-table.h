@@ -66,6 +66,8 @@ struct JSDispatchEntry {
   // Test whether this entry is currently marked as alive.
   inline bool IsMarked() const;
 
+  static constexpr uint32_t kObjectPointerShift = 16;
+
  private:
   friend class JSDispatchTable;
 
@@ -86,7 +88,6 @@ struct JSDispatchEntry {
   // +------------------------+-------------+-----------------+
   //
   static constexpr Address kMarkingBit = 1 << 16;
-  static constexpr uint32_t kObjectPointerShift = 16;
   static constexpr uint32_t kParameterCountMask = 0xffff;
   std::atomic<Address> encoded_word_;
 
@@ -121,19 +122,22 @@ static_assert(sizeof(JSDispatchEntry) == kJSDispatchTableEntrySize);
 class V8_EXPORT_PRIVATE JSDispatchTable
     : public ExternalEntityTable<JSDispatchEntry,
                                  kJSDispatchTableReservationSize> {
+  using Base =
+      ExternalEntityTable<JSDispatchEntry, kJSDispatchTableReservationSize>;
+
  public:
   // Size of a JSDispatchTable, for layout computation in IsolateData.
-  static int constexpr kSize = 2 * kSystemPointerSize;
+  static constexpr int kSize = 2 * kSystemPointerSize;
+
   static_assert(kMaxJSDispatchEntries == kMaxCapacity);
+  static_assert(!kSupportsCompaction);
 
   JSDispatchTable() = default;
   JSDispatchTable(const JSDispatchTable&) = delete;
   JSDispatchTable& operator=(const JSDispatchTable&) = delete;
 
   // The Spaces used by a JSDispatchTable.
-  using Space =
-      ExternalEntityTable<JSDispatchEntry, kJSDispatchTableReservationSize>::
-          SpaceWithBlackAllocationSupport;
+  using Space = Base::SpaceWithBlackAllocationSupport;
 
   // Retrieves the entrypoint of the entry referenced by the given handle.
   inline Address GetEntrypoint(JSDispatchHandle handle);
@@ -145,6 +149,9 @@ class V8_EXPORT_PRIVATE JSDispatchTable
   // return a Tagged<Union<Code, BytecodeArray>>.
   Tagged<Code> GetCode(JSDispatchHandle handle);
 
+  // Returns the address of the Code object stored in the specified entry.
+  inline Address GetCodeAddress(JSDispatchHandle handle);
+
   // Retrieves the parameter count of the entry referenced by the given handle.
   inline uint16_t GetParameterCount(JSDispatchHandle handle);
 
@@ -152,6 +159,9 @@ class V8_EXPORT_PRIVATE JSDispatchTable
   // entrypoint. The code must be compatible with the specified entry. In
   // particular, the two must use the same parameter count.
   void SetCode(JSDispatchHandle handle, Tagged<Code> new_code);
+  // TODO(saelo): once every entry of the table has a Code object, many calls
+  // to this function can probably be deleted.
+  bool HasCode(JSDispatchHandle handle);
 
   // Allocates a new entry in the table and initialize it.
   //
@@ -159,10 +169,27 @@ class V8_EXPORT_PRIVATE JSDispatchTable
   JSDispatchHandle AllocateAndInitializeEntry(Space* space,
                                               uint16_t parameter_count);
 
+  // The following methods are used to pre allocate entries and then initialize
+  // them later.
+  JSDispatchHandle PreAllocateEntries(Space* space, int num,
+                                      bool ensure_static_handles);
+  bool PreAllocatedEntryNeedsInitialization(Space* space,
+                                            JSDispatchHandle handle);
+  void InitializePreAllocatedEntry(Space* space, JSDispatchHandle handle,
+                                   Tagged<Code> code, uint16_t parameter_count);
+
+  // Can be used to statically predict the handles if the pre allocated entries
+  // are in the overall first read only segment of the whole table.
+  inline static JSDispatchHandle GetStaticHandleForInitialSegmentEntry(
+      int index) {
+    return static_cast<JSDispatchHandle>(kInternalNullEntryIndex + 1 + index)
+           << kJSDispatchHandleShift;
+  }
+
   // Marks the specified entry as alive.
   //
   // This method is atomic and can be called from background threads.
-  inline void Mark(Space* space, JSDispatchHandle handle);
+  inline void Mark(JSDispatchHandle handle);
 
   // Frees all unmarked entries in the given space.
   //
@@ -177,23 +204,53 @@ class V8_EXPORT_PRIVATE JSDispatchTable
   // The callback function will be invoked once for every entry that is
   // currently in use, i.e. has been allocated and not yet freed, and will
   // receive the handle of that entry.
-  // TODO(saelo): does it also need to get the referenced object pointer?
   template <typename Callback>
   void IterateActiveEntriesIn(Space* space, Callback callback);
 
   // The base address of this table, for use in JIT compilers.
   Address base_address() const { return base(); }
 
-  void Initialize();
+  static JSDispatchTable* instance() {
+    CheckInitialization(false);
+    return instance_nocheck();
+  }
+  static void Initialize() {
+    CheckInitialization(true);
+    instance_nocheck()->Base::Initialize();
+  }
+
+  static constexpr uintptr_t kEntryCodeObjectOffset =
+      offsetof(JSDispatchEntry, encoded_word_);
+  static constexpr uintptr_t kEntryEntrypointOffset =
+      offsetof(JSDispatchEntry, entrypoint_);
+
+#ifdef DEBUG
+  inline void VerifyEntry(JSDispatchHandle handle, Space* space,
+                          Space* ro_space);
+#endif  // DEBUG
 
  private:
+  static void CheckInitialization(bool is_initializing) {
+#ifdef DEBUG
+    static std::atomic<bool> initialized = false;
+    DCHECK_NE(is_initializing, initialized.load());
+    initialized.store(true);
+#endif
+  }
+
+  static JSDispatchTable* instance_nocheck();
+
   inline uint32_t HandleToIndex(JSDispatchHandle handle) const;
   inline JSDispatchHandle IndexToHandle(uint32_t index) const;
 };
 
 static_assert(sizeof(JSDispatchTable) == JSDispatchTable::kSize);
 
-V8_EXPORT_PRIVATE JSDispatchTable* GetProcessWideJSDispatchTable();
+// TODO(olivf): Remove this accessor and also unify implementation with
+// GetProcessWideCodePointerTable().
+V8_EXPORT_PRIVATE inline JSDispatchTable* GetProcessWideJSDispatchTable() {
+  return JSDispatchTable::instance();
+}
 
 }  // namespace internal
 }  // namespace v8

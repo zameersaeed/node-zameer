@@ -37,7 +37,6 @@
 #include "include/v8-locker.h"
 #include "src/base/lazy-instance.h"
 #include "src/base/logging.h"
-#include "src/base/optional.h"
 #include "src/base/platform/condition-variable.h"
 #include "src/base/platform/mutex.h"
 #include "src/base/platform/semaphore.h"
@@ -424,8 +423,8 @@ int TestPlatform::NumberOfWorkerThreads() {
 }
 
 std::shared_ptr<v8::TaskRunner> TestPlatform::GetForegroundTaskRunner(
-    v8::Isolate* isolate) {
-  return CcTest::default_platform()->GetForegroundTaskRunner(isolate);
+    v8::Isolate* isolate, v8::TaskPriority priority) {
+  return CcTest::default_platform()->GetForegroundTaskRunner(isolate, priority);
 }
 
 void TestPlatform::PostTaskOnWorkerThreadImpl(

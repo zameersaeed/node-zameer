@@ -4000,6 +4000,7 @@ void CodeGenerator::AssembleArchTrap(Instruction* instr,
           static_cast<TrapId>(i.InputInt32(instr_->InputCount() - 1));
       GenerateCallToTrap(trap_id);
     }
+
    private:
     void GenerateCallToTrap(TrapId trap_id) {
       gen_->AssembleSourcePosition(instr_);
@@ -4411,7 +4412,7 @@ void CodeGenerator::AssembleConstructFrame() {
       if (call_descriptor->IsWasmFunctionCall() ||
           call_descriptor->IsWasmImportWrapper() ||
           call_descriptor->IsWasmCapiFunction()) {
-        __ Push(kWasmInstanceRegister);
+        __ Push(kWasmImplicitArgRegister);
       }
       if (call_descriptor->IsWasmImportWrapper()) {
         // If the wrapper is running on a secondary stack, it will switch to the
@@ -4641,7 +4642,7 @@ void CodeGenerator::MoveToTempLocation(InstructionOperand* source,
   // might be needed for the move to the temp location.
   temps.Exclude(move_cycle_.scratch_regs);
   if (!IsFloatingPoint(rep)) {
-    if (temps.hasAvailable()) {
+    if (temps.CanAcquire()) {
       Register scratch = move_cycle_.temps->Acquire();
       move_cycle_.scratch_reg.emplace(scratch);
     }

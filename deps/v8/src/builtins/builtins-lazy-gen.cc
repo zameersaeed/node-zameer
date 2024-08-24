@@ -14,6 +14,8 @@
 namespace v8 {
 namespace internal {
 
+#include "src/codegen/define-code-stub-assembler-macros.inc"
+
 void LazyBuiltinsAssembler::GenerateTailCallToJSCode(
     TNode<Code> code, TNode<JSFunction> function) {
   auto argc = UncheckedParameter<Int32T>(Descriptor::kActualArgumentsCount);
@@ -144,7 +146,7 @@ void LazyBuiltinsAssembler::CompileLazy(TNode<JSFunction> function) {
   // Ensure we have a feedback vector.
   code = Select<Code>(
       IsFeedbackVector(feedback_cell_value), [=]() { return sfi_code; },
-      [=]() {
+      [=, this]() {
         return CAST(CallRuntime(Runtime::kInstallBaselineCode,
                                 Parameter<Context>(Descriptor::kContext),
                                 function));
@@ -172,6 +174,8 @@ TF_BUILTIN(CompileLazyDeoptimizedCode, LazyBuiltinsAssembler) {
   StoreCodePointerField(function, JSFunction::kCodeOffset, code);
   GenerateTailCallToJSCode(code, function);
 }
+
+#include "src/codegen/undef-code-stub-assembler-macros.inc"
 
 }  // namespace internal
 }  // namespace v8

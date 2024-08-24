@@ -2258,6 +2258,7 @@ void Shell::RealmEval(const v8::FunctionCallbackInfo<v8::Value>& info) {
       CreateScriptOrigin(isolate, String::NewFromUtf8Literal(isolate, "(d8)"),
                          ScriptType::kClassic);
 
+  if (isolate->IsExecutionTerminating()) return;
   ScriptCompiler::Source script_source(source, origin);
   Local<UnboundScript> script;
   if (!ScriptCompiler::CompileUnboundScript(isolate, &script_source)
@@ -2484,7 +2485,7 @@ void Shell::SetPromiseHooks(const v8::FunctionCallbackInfo<v8::Value>& info) {
   DCHECK(i::ValidateCallbackInfo(info));
   Isolate* isolate = info.GetIsolate();
   if (i::v8_flags.correctness_fuzzer_suppressions) {
-    // Setting promise hoooks dynamically has unexpected timing side-effects
+    // Setting promise hooks dynamically has unexpected timing side-effects
     // with certain promise optimizations. We might not get all callbacks for
     // previously scheduled Promises or optimized code-paths that skip Promise
     // creation.

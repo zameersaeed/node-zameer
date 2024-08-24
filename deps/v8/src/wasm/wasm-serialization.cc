@@ -439,9 +439,8 @@ void NativeModuleSerializer::WriteCode(const WasmCode* code, Writer* writer) {
   writer->WriteVector(code->inlining_positions());
   writer->WriteVector(code->deopt_data());
   writer->WriteVector(code->protected_instructions_data());
-#if V8_TARGET_ARCH_MIPS64 || V8_TARGET_ARCH_ARM || V8_TARGET_ARCH_PPC ||      \
-    V8_TARGET_ARCH_PPC64 || V8_TARGET_ARCH_S390X || V8_TARGET_ARCH_RISCV32 || \
-    V8_TARGET_ARCH_RISCV64
+#if V8_TARGET_ARCH_MIPS64 || V8_TARGET_ARCH_ARM || V8_TARGET_ARCH_PPC64 || \
+    V8_TARGET_ARCH_S390X || V8_TARGET_ARCH_RISCV32 || V8_TARGET_ARCH_RISCV64
   // On platforms that don't support misaligned word stores, copy to an aligned
   // buffer if necessary so we can relocate the serialized code.
   std::unique_ptr<uint8_t[]> aligned_buffer;
@@ -564,8 +563,11 @@ bool NativeModuleSerializer::Write(Writer* writer) {
   for (WasmCode* code : code_table_) {
     WriteCode(code, writer);
   }
-  // If not a single function was written, serialization was not successful.
-  if (num_turbofan_functions_ == 0) return false;
+  // No TurboFan-compiled functions in jitless mode.
+  if (!v8_flags.wasm_jitless) {
+    // If not a single function was written, serialization was not successful.
+    if (num_turbofan_functions_ == 0) return false;
+  }
 
   // Make sure that the serialized total code size was correct.
   CHECK_EQ(total_written_code_, total_code_size);
@@ -1065,7 +1067,7 @@ MaybeHandle<WasmModuleObject> DeserializeNativeModule(
     wasm_engine->UpdateNativeModuleCache(error, shared_native_module, isolate);
   }
 
-  Handle<Script> script =
+  DirectHandle<Script> script =
       wasm_engine->GetOrCreateScript(isolate, shared_native_module, source_url);
   Handle<WasmModuleObject> module_object =
       WasmModuleObject::New(isolate, shared_native_module, script);
