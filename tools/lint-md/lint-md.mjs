@@ -9361,7 +9361,7 @@ function transformGfmAutolinkLiterals(tree) {
     tree,
     [
       [/(https?:\/\/|www(?=\.))([-.\w]+)([^ \t\r\n]*)/gi, findUrl],
-      [/([-.\w+]+)@([-\w]+(?:\.[-\w]+)+)/g, findEmail]
+      [/(?<=^|\s|\p{P}|\p{S})([-.\w+]+)@([-\w]+(?:\.[-\w]+)+)/gu, findEmail]
     ],
     {ignore: ['link', 'linkReference']}
   );
